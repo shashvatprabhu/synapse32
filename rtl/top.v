@@ -168,7 +168,7 @@ module top (
         .software_interrupt(software_interrupt),
         .external_interrupt(external_interrupt),
         .module_instr_in(instr_to_cpu),
-        .module_read_data_in(cpu_mem_read_en ? mem_read_data : mem_data_reg),
+        .module_read_data_in(mem_data_reg),
         .module_pc_out(cpu_pc_out),
         .module_wr_data_out(cpu_mem_write_data),
         .module_mem_wr_en(cpu_mem_write_en),
