@@ -1,4 +1,5 @@
 `default_nettype none
+`include "instr_defines.vh"
 module riscv_cpu (
     input wire clk,
     input wire rst,
@@ -176,7 +177,7 @@ module riscv_cpu (
     assign rf_inst0_wr_en = wb_inst0_wr_en_out;
     assign rf_inst0_rd_value_in = wb_inst0_rd_value_out;
 
-    assign mem_is_load = (ex_mem_inst0_instr_id_out == 6'h16) ||  // LW
+    assign mem_is_load = (ex_mem_inst0_instr_id_out == INSTR_LW) ||  // LW
                          (ex_mem_inst0_instr_id_out == 6'h14) ||  // LB
                          (ex_mem_inst0_instr_id_out == 6'h15) ||  // LH
                          (ex_mem_inst0_instr_id_out == 6'h17) ||  // LBU
@@ -445,7 +446,7 @@ module riscv_cpu (
         .jump_addr_in(ex_mem_inst0_jump_addr_out),
         .instr_id_in(ex_mem_inst0_instr_id_out),
         .rd_valid_in(ex_mem_inst0_rd_valid_out),
-        .mem_data_in(module_read_data_in),
+        .mem_data_in(mem_load_result),
         .store_load_hazard(store_load_hazard),
         .store_data(forwarded_store_data),
         .rs1_addr_out(mem_wb_inst0_rs1_addr_out),
@@ -468,7 +469,8 @@ module riscv_cpu (
         .rd_valid_in(mem_wb_inst0_rd_valid_out),
         .rd_addr_in(mem_wb_inst0_rd_addr_out),
         .rd_value_in(mem_wb_inst0_exec_output_out),
-        .mem_data_in(mem_wb_inst0_mem_data_out),
+        .mem_data_in(mem_wb_inst0_mem_data_out),      // Keep existing connection for compatibility
+        .mem_data_direct(module_read_data_in),        // NEW: Direct memory data input
         .instr_id_in(mem_wb_inst0_instr_id_out),
         .rd_addr_out(wb_inst0_rd_addr_out),
         .rd_value_out(wb_inst0_rd_value_out),
