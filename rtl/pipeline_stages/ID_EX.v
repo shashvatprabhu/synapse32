@@ -81,6 +81,12 @@ always @(posedge clk or posedge rst) begin
         rs1_value_out <= rs1_value_in;
         rs2_value_out <= rs2_value_in;
         valid_out <= valid_in;
+
+        // DEBUG: Track SW x8 instruction (instr_id 27 is INSTR_SW)
+        if (instr_id_in == 6'd27 && rs2_addr_in == 5'd8) begin
+            $display("[ID_EX] @%t: SW x8 IN ID_EX rs2_value=0x%h imm=%d addr=base+%d valid=%b enable=%b flush=%b hazard_stall=%b",
+                     $time, rs2_value_in, imm_in, imm_in, valid_in, enable, flush, hazard_stall);
+        end
     end
     // else hold all values (stalled)
 end

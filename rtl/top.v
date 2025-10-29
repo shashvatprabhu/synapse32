@@ -24,6 +24,12 @@ module top (
     // Wires to connect CPU and memories
     wire [31:0] cpu_pc_out;
     wire [31:0] instr_to_cpu;
+
+    // TIMING FIX: Buffer instruction to ensure it's sampled after cache settles
+    reg [31:0] instr_buffered;
+    always @(*) begin
+        instr_buffered = instr_to_cpu;
+    end
     wire [31:0] cpu_mem_read_addr;
     wire [31:0] cpu_mem_write_addr;
     wire [31:0] cpu_mem_write_data;
@@ -161,7 +167,7 @@ module top (
         .timer_interrupt(timer_interrupt),
         .software_interrupt(software_interrupt),
         .external_interrupt(external_interrupt),
-        .module_instr_in(instr_to_cpu),
+        .module_instr_in(instr_buffered),
         .module_read_data_in(mem_read_data),
         .module_pc_out(cpu_pc_out),
         .module_wr_data_out(cpu_mem_write_data),

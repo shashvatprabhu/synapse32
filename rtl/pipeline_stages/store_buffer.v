@@ -37,15 +37,15 @@ module store_buffer (
     assign forward_data = buffer_data;
 
     // Debug output (can be enabled for debugging)
-    // always @(posedge clk) begin
-    //     if (capture_store) begin
-    //         $display("[STORE_BUFFER] @%t: CAPTURE store addr=0x%h data=0x%h", $time, store_addr, store_data);
-    //     end
-    //     if (load_request) begin
-    //         $display("[STORE_BUFFER] @%t: LOAD REQUEST addr=0x%h buffer_valid=%b addr_match=%b forward=%b data=0x%h",
-    //                  $time, load_addr, buffer_valid, addr_match, forward_valid, forward_data);
-    //     end
-    // end
+    always @(posedge clk) begin
+        if (capture_store) begin
+            $display("[STORE_BUFFER] @%t: CAPTURE store addr=0x%h data=0x%h", $time, store_addr, store_data);
+        end
+        if (load_request) begin
+            $display("[STORE_BUFFER] @%t: LOAD REQUEST addr=0x%h buffer_valid=%b addr_match=%b forward=%b data=0x%h",
+                     $time, load_addr, buffer_valid, addr_match, forward_valid, forward_data);
+        end
+    end
 
     // Buffer management
     always @(posedge clk or posedge rst) begin

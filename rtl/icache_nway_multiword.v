@@ -279,11 +279,15 @@ end
         endcase
     end
     
-    // BLOCK 4: Synchronous CPU Output Generation
+    // BLOCK 4: COMBINATIONAL CPU Output for Cache Hits (to avoid 1-cycle delay)
+    // Registered output only for cache misses
+    reg [DATA_WIDTH-1:0] miss_data_reg;
+    reg miss_valid_reg;
+
     always @(posedge clk or posedge rst) begin
         if (rst) begin
-            cpu_data    <= 0;
-            cpu_valid   <= 0;
+            miss_data_reg <= 0;
+            miss_valid_reg <= 0;
             cache_hit   <= 0;
             cache_miss  <= 0;
             cache_evict <= 0;
@@ -292,21 +296,44 @@ end
             cache_hit   <= 0;
             cache_miss  <= 0;
             cache_evict <= 0;
-            
-            // Handle hit (immediate response)
+
+            // Handle hit (status only)
             if (cpu_req && hit && state == IDLE) begin
-                cpu_data  <= data_array[req_set][hit_way_num][req_word];
-                cpu_valid <= 1;
                 cache_hit <= 1;
+                miss_valid_reg <= 0;
             end else if (state == ALLOCATE) begin
-                // Handle miss completion
-                cpu_data  <= burst_buffer[saved_word];
-                cpu_valid <= 1;
+                // Handle miss completion - register the data
+                miss_data_reg  <= burst_buffer[saved_word];
+                miss_valid_reg <= 1;
                 cache_miss <= 1;
                 cache_evict <= saved_will_evict;
             end else begin
-                cpu_valid <= 0;
+                miss_valid_reg <= 0;
             end
+        end
+    end
+
+    // COMBINATIONAL output for hits, registered output for misses
+    always @(*) begin
+        if (cpu_req && hit && state == IDLE) begin
+            // COMBINATIONAL: Immediate response on cache hit
+            cpu_data = data_array[req_set][hit_way_num][req_word];
+            cpu_valid = 1;
+        end else if (miss_valid_reg) begin
+            // Use registered data from previous ALLOCATE
+            cpu_data = miss_data_reg;
+            cpu_valid = 1;
+        end else begin
+            cpu_data = 0;
+            cpu_valid = 0;
+        end
+    end
+
+    // DEBUG: Track instruction fetch for Block 2
+    always @(*) begin
+        if (cpu_addr >= 32'hD0 && cpu_addr <= 32'hE4) begin
+            $display("[CACHE] @%t: PC=0x%h req_word=%d hit=%b data=0x%08x",
+                     $time, cpu_addr, req_word, hit, cpu_data);
         end
     end
 

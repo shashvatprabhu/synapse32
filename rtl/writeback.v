@@ -30,4 +30,12 @@ module writeback (
                        rd_valid_in &&            // Instruction requires write
                        (rd_addr_in != 5'b0);     // Not writing to x0 (RISC-V hardwired zero)
 
+    // DEBUG: Track x8 writes
+    always @(*) begin
+        if (wr_en_out && rd_addr_in == 5'd8) begin
+            $display("[WRITEBACK] @%t: WRITING x8 = 0x%h (valid=%b rd_valid=%b)",
+                     $time, rd_value_out, valid_in, rd_valid_in);
+        end
+    end
+
 endmodule

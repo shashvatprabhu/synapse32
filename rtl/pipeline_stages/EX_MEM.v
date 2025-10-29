@@ -62,6 +62,12 @@ always @(posedge clk or posedge rst) begin
         instr_id_out <= instr_id_in;
         rd_valid_out <= rd_valid_in;
         valid_out <= valid_in;
+
+        // DEBUG: Track SW x8,16 (instr_id=27, rs2=8, addr should be base+16=0x10000010)
+        if (instr_id_in == 6'd27 && rs2_addr_in == 5'd8 && mem_addr_in[7:0] == 8'h10) begin
+            $display("[EX_MEM] @%t: SW x8,16 IN EX_MEM rs2_value=0x%h addr=0x%h valid_in=%b valid_out=%b enable=%b",
+                     $time, rs2_value_in, mem_addr_in, valid_in, valid_in, enable);
+        end
     end
     // else hold all values (stalled)
 end
