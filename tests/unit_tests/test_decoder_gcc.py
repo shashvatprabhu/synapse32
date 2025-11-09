@@ -8,7 +8,7 @@ def assemble_riscv_instruction(assembly_code, bin_file="temp.bin"):
         f.write(assembly_code)
 
     subprocess.run([
-        "riscv64-unknown-elf-as", "-march=rv32i_zifencei", "-mabi=ilp32", "-o", "temp.o", "temp.s"
+        "riscv64-unknown-elf-as", "-march=rv32i", "-mabi=ilp32", "-o", "temp.o", "temp.s"
     ], check=True)
 
     subprocess.run([

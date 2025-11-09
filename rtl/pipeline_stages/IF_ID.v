@@ -13,7 +13,7 @@ module IF_ID(
     output reg valid_out
 );
 
-always @(negedge clk or posedge rst) begin
+always @(posedge clk or posedge rst) begin
     if (rst) begin
         pc_out <= 32'b0;
         instruction_out <= 32'b0;

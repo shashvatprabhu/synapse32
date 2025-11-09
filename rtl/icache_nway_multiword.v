@@ -15,9 +15,8 @@ module icache_nway_multiword #(
     // CPU Interface
     input  wire                    cpu_req,
     input  wire [ADDR_WIDTH-1:0]   cpu_addr,
-    output reg  [DATA_WIDTH-1:0]   cpu_data,
-    output reg                     cpu_valid,
-    output reg                     cpu_stall,
+    output wire [DATA_WIDTH-1:0]   cpu_data,
+    output wire                    cpu_stall,
     
     // Memory Interface
     output reg                     mem_req,
@@ -239,18 +238,17 @@ module icache_nway_multiword #(
     end
     
     
-    // BLOCK 3: Combinational Memory Interface & Stall Logic
-    
+    // BLOCK 3: Combinational Memory Interface Logic
+    // Note: cpu_stall is now derived from registered cpu_valid_reg (see output assignments)
+
     always @(*) begin
         mem_req = 0;
         mem_addr = 0;
         mem_burst_len = 0;
-        cpu_stall = 0;
-        
+
         case (state)
             IDLE: begin
                 if (cpu_req && !hit) begin
-                    cpu_stall = 1;
                     // Start memory request immediately when going to FETCH
                     mem_req = 1;
                     mem_addr = block_addr;  // Use current address, not saved
@@ -258,31 +256,30 @@ module icache_nway_multiword #(
                     mem_burst_len = ($clog2(BLOCK_SIZE)+1)'(BLOCK_SIZE - 1);
                 end
             end
-            
+
             FETCH: begin
                 // No memory request in FETCH state
-                cpu_stall = 1;
             end
-            
+
             ALLOCATE: begin
-                cpu_stall = 1;
+                // Allocating data into cache
             end
-            
+
             default: begin
-                cpu_stall = 0;
+                // Idle or other states
             end
         endcase
     end
     
-    // BLOCK 4: COMBINATIONAL CPU Output for Cache Hits (to avoid 1-cycle delay)
-    // Registered output only for cache misses
-    reg [DATA_WIDTH-1:0] miss_data_reg;
-    reg miss_valid_reg;
+    // BLOCK 4: Registered CPU Output for ALL cases (hits and misses)
+    // cpu_data_reg provides stable, registered output to the CPU
+    reg [DATA_WIDTH-1:0] cpu_data_reg;
+    reg cpu_valid_reg;  // Used internally to generate cpu_stall
 
     always @(posedge clk or posedge rst) begin
         if (rst) begin
-            miss_data_reg <= 0;
-            miss_valid_reg <= 0;
+            cpu_data_reg <= 0;
+            cpu_valid_reg <= 0;
             cache_hit   <= 0;
             cache_miss  <= 0;
             cache_evict <= 0;
@@ -292,36 +289,25 @@ module icache_nway_multiword #(
             cache_miss  <= 0;
             cache_evict <= 0;
 
-            // Handle hit (status only)
+            // Handle cache hit - register the data (valid NEXT cycle)
             if (cpu_req && hit && state == IDLE) begin
+                cpu_data_reg <= data_array[req_set][hit_way_num][req_word];
+                cpu_valid_reg <= 1;  // Data will be valid next cycle
                 cache_hit <= 1;
-                miss_valid_reg <= 0;
             end else if (state == ALLOCATE) begin
                 // Handle miss completion - register the data
-                miss_data_reg  <= burst_buffer[saved_word];
-                miss_valid_reg <= 1;
+                cpu_data_reg  <= burst_buffer[saved_word];
+                cpu_valid_reg <= 1;
                 cache_miss <= 1;
                 cache_evict <= saved_will_evict;
             end else begin
-                miss_valid_reg <= 0;
+                cpu_valid_reg <= 0;  // No valid data
             end
         end
     end
 
-    // COMBINATIONAL output for hits, registered output for misses
-    always @(*) begin
-        if (cpu_req && hit && state == IDLE) begin
-            // COMBINATIONAL: Immediate response on cache hit
-            cpu_data = data_array[req_set][hit_way_num][req_word];
-            cpu_valid = 1;
-        end else if (miss_valid_reg) begin
-            // Use registered data from previous ALLOCATE
-            cpu_data = miss_data_reg;
-            cpu_valid = 1;
-        end else begin
-            cpu_data = 0;
-            cpu_valid = 0;
-        end
-    end
+    // Output assignments
+    assign cpu_data = cpu_data_reg;
+    assign cpu_stall = !cpu_valid_reg;  // Stall when data not valid
 
 endmodule

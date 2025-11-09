@@ -159,7 +159,7 @@ async def test_fibonacci_program(dut):
     expected_sequence = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
     
     # Monitor for CPU_DONE signal
-    max_cycles = 10000  # Maximum cycles to run before timeout
+    max_cycles = 50000  # Maximum cycles to run before timeout (increased for registered cache with 2-cycle fetch latency + cache misses)
     cpu_done = False
     data_values = []
     

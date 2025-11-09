@@ -23,11 +23,9 @@ module riscv_cpu (
     // Stall and control signals
     wire load_use_stall;
     wire pc_stall;
-    wire execution_flush;
     wire pipeline_flush;
 
     assign pc_stall = cache_stall || load_use_stall;
-    assign pipeline_flush = execution_flush;
 
     // Valid bit wires - NEW
     wire if_id_valid_out;
@@ -163,7 +161,7 @@ module riscv_cpu (
     wire mret_instruction;
     wire ecall_exception;
     wire ebreak_exception;
-
+    
     // Signal assignments
     assign pc_inst0_j_signal = ex_inst0_jump_signal_out;
     assign pc_inst0_jump = ex_inst0_jump_addr_out;
@@ -370,7 +368,7 @@ module riscv_cpu (
         .mem_addr(ex_inst0_mem_addr_out),
         .rs1_value_out(ex_inst0_rs1_value_out),
         .rs2_value_out(ex_inst0_rs2_value_out),
-        .flush_pipeline(execution_flush),
+        .flush_pipeline(pipeline_flush),
         .valid_out(ex_inst0_valid_out),   // NEW - add this wire
         .interrupt_pending(interrupt_pending),
         .interrupt_cause(interrupt_cause),

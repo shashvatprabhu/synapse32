@@ -3,6 +3,19 @@ from cocotb.triggers import RisingEdge, Timer
 from cocotb.clock import Clock
 import pytest
 
+async def wait_for_valid_signal(dut, signal_name, max_cycles=10):
+    """Wait for signal to have valid (non-x) value"""
+    for cycle in range(max_cycles):
+        await RisingEdge(dut.clk)
+        try:
+            signal = getattr(dut, signal_name)
+            value = int(signal.value)
+            return value  # Success - got valid value
+        except (ValueError, AttributeError):
+            continue  # Still 'x' or not found, keep waiting
+
+    raise TimeoutError(f"{signal_name} never became valid after {max_cycles} cycles")
+
 async def run_csr_test_program(dut, instr_mem):
     """Helper function to run a CSR test program"""
     # Dictionary to track register values
@@ -18,7 +31,11 @@ async def run_csr_test_program(dut, instr_mem):
     # Feed instructions and track CSR operations
     for cycle in range(len(instr_mem) + 10):  # Run for enough cycles
         # Feed instruction based on PC
-        pc = int(dut.module_pc_out.value)
+        try:
+            pc = int(dut.module_pc_out.value)
+        except ValueError:
+            # PC not valid yet, use 0
+            pc = 0
         current_instr = get_instr(pc)
         dut.module_instr_in.value = current_instr
         
@@ -78,10 +95,15 @@ async def test_csr_basic_operations(dut):
     # Reset
     dut.module_instr_in.value = 0
     dut.module_read_data_in.value = 0
+    dut.cache_stall.value = 0  # No cache stall when testing CPU directly
+    dut.timer_interrupt.value = 0
+    dut.software_interrupt.value = 0
+    dut.external_interrupt.value = 0
     dut.rst.value = 1
     await Timer(20, units="ns")
     dut.rst.value = 0
-    await RisingEdge(dut.clk)
+    # Wait for module_pc_out to become valid
+    await wait_for_valid_signal(dut, 'module_pc_out', max_cycles=10)
 
     # Program to test CSR operations:
     instr_mem = [
@@ -148,10 +170,14 @@ async def test_csr_mstatus_operations(dut):
     # Reset
     dut.module_instr_in.value = 0
     dut.module_read_data_in.value = 0
+    dut.cache_stall.value = 0  # No cache stall when testing CPU directly
+    dut.timer_interrupt.value = 0
+    dut.software_interrupt.value = 0
+    dut.external_interrupt.value = 0
     dut.rst.value = 1
     await Timer(20, units="ns")
     dut.rst.value = 0
-    await RisingEdge(dut.clk)
+    await wait_for_valid_signal(dut, 'module_pc_out', max_cycles=10)
 
     # Program to test MSTATUS operations:
     instr_mem = [
@@ -204,10 +230,14 @@ async def test_csr_cycle_counter(dut):
     # Reset
     dut.module_instr_in.value = 0
     dut.module_read_data_in.value = 0
+    dut.cache_stall.value = 0  # No cache stall when testing CPU directly
+    dut.timer_interrupt.value = 0
+    dut.software_interrupt.value = 0
+    dut.external_interrupt.value = 0
     dut.rst.value = 1
     await Timer(20, units="ns")
     dut.rst.value = 0
-    await RisingEdge(dut.clk)
+    await wait_for_valid_signal(dut, 'module_pc_out', max_cycles=10)
 
     # Program to test cycle counter:
     instr_mem = [
@@ -253,10 +283,14 @@ async def test_csr_invalid_access(dut):
     # Reset
     dut.module_instr_in.value = 0
     dut.module_read_data_in.value = 0
+    dut.cache_stall.value = 0  # No cache stall when testing CPU directly
+    dut.timer_interrupt.value = 0
+    dut.software_interrupt.value = 0
+    dut.external_interrupt.value = 0
     dut.rst.value = 1
     await Timer(20, units="ns")
     dut.rst.value = 0
-    await RisingEdge(dut.clk)
+    await wait_for_valid_signal(dut, 'module_pc_out', max_cycles=10)
 
     # Program to test invalid CSR access:
     instr_mem = [

@@ -3,6 +3,19 @@ from cocotb.triggers import RisingEdge, Timer
 from cocotb.clock import Clock
 import pytest
 
+async def wait_for_valid_signal(dut, signal_name, max_cycles=10):
+    """Wait for signal to have valid (non-x) value"""
+    for cycle in range(max_cycles):
+        await RisingEdge(dut.clk)
+        try:
+            signal = getattr(dut, signal_name)
+            value = int(signal.value)
+            return value  # Success - got valid value
+        except (ValueError, AttributeError):
+            continue  # Still 'x' or not found, keep waiting
+
+    raise TimeoutError(f"{signal_name} never became valid after {max_cycles} cycles")
+
 @cocotb.test()
 async def test_riscv_cpu_raw_hazards(dut):
     """Test for RAW hazards - when an instruction needs register data from previous instructions"""
@@ -14,10 +27,15 @@ async def test_riscv_cpu_raw_hazards(dut):
     # Reset
     dut.module_instr_in.value = 0
     dut.module_read_data_in.value = 0
+    dut.cache_stall.value = 0  # No cache stall when testing CPU directly
+    dut.timer_interrupt.value = 0
+    dut.software_interrupt.value = 0
+    dut.external_interrupt.value = 0
     dut.rst.value = 1
     await Timer(20, units="ns")
     dut.rst.value = 0
-    await RisingEdge(dut.clk)
+    # Wait for module_pc_out to become valid
+    await wait_for_valid_signal(dut, 'module_pc_out', max_cycles=10)
 
     # Program with multiple back-to-back RAW hazards:
     # 1. Simple RAW case: x1 <- x2 <- x3
@@ -65,10 +83,15 @@ async def test_riscv_cpu_control_hazards(dut):
     # Reset
     dut.module_instr_in.value = 0
     dut.module_read_data_in.value = 0
+    dut.cache_stall.value = 0  # No cache stall when testing CPU directly
+    dut.timer_interrupt.value = 0
+    dut.software_interrupt.value = 0
+    dut.external_interrupt.value = 0
     dut.rst.value = 1
     await Timer(20, units="ns")
     dut.rst.value = 0
-    await RisingEdge(dut.clk)
+    # Wait for module_pc_out to become valid
+    await wait_for_valid_signal(dut, 'module_pc_out', max_cycles=10)
 
     # Program with branch and jump instructions:
     instr_mem = [
@@ -91,7 +114,7 @@ async def test_riscv_cpu_control_hazards(dut):
     expected_values = {
         1: 10,    # x1 = 10
         2: 10,    # x2 = 10 (after branch)
-        3: 0,     # x3 = 0 (after branch)
+        3: 0,     # x3 = 0 (after branch, instruction after branch should be flushed)
     }
     print("\nVerifying register values:")
     for reg, expected in expected_values.items():
@@ -188,7 +211,11 @@ async def run_test_program(dut, instr_mem):
     # Feed instructions and track pipeline stages
     for cycle in range(30):  # Run for enough cycles
         # Feed instruction based on PC
-        pc = int(dut.module_pc_out.value)
+        try:
+            pc = int(dut.module_pc_out.value)
+        except ValueError:
+            # PC not valid yet, use 0
+            pc = 0
         current_instr = get_instr(pc)
         dut.module_instr_in.value = current_instr
         

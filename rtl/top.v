@@ -112,7 +112,6 @@ module top (
         .cpu_req(1'b1),                 // CPU always requests instructions
         .cpu_addr(cpu_pc_out),          // PC from CPU
         .cpu_data(instr_to_cpu),        // Instruction to CPU
-        .cpu_valid(),                   // Not used - instruction always available when not stalled
         .cpu_stall(cache_stall),        // Stall signal to CPU
         
         // Memory Interface (to Burst Controller)
