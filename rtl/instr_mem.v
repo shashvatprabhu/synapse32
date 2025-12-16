@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 `default_nettype none
 // instr_mem.v - instruction memory for single-cycle RISC-V CPU with byte/halfword/word access
 

@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 `default_nettype none
 `include "instr_defines.vh"
 
@@ -17,7 +18,8 @@ module riscv_cpu (
     input wire timer_interrupt,
     input wire software_interrupt,
     input wire external_interrupt,
-    input wire cache_stall
+    input wire cache_stall,
+    output wire load_use_stall_out
 );
 
     // Stall and control signals
@@ -167,6 +169,7 @@ module riscv_cpu (
     assign pc_inst0_jump = ex_inst0_jump_addr_out;
     assign branch_flush = ex_inst0_jump_signal_out;
     assign module_pc_out = pc_inst0_out;
+    assign load_use_stall_out = load_use_stall;
 
     // Memory interface assignments
     // Memory interface - writes driven by store buffer, reads by memory unit
@@ -199,8 +202,9 @@ module riscv_cpu (
         .clk(clk),
         .rst(rst),
         .pc_in(pc_inst0_out),
-        .instruction_in(branch_flush ? 32'h13 : module_instr_in),
+        .instruction_in(module_instr_in),
         .enable(!(cache_stall || load_use_stall)),
+        .flush(branch_flush),
         .valid_in(!cache_stall),
         .pc_out(if_id_pc_out),
         .instruction_out(if_id_instr_out),
@@ -251,7 +255,7 @@ module riscv_cpu (
     ID_EX id_ex_inst0 (
         .clk(clk),
         .rst(rst),
-        .enable(!cache_stall),
+        .enable(!(cache_stall || load_use_stall)),
         .rs1_valid_in(decoder_inst0_rs1_valid_out),
         .rs2_valid_in(decoder_inst0_rs2_valid_out),
         .rd_valid_in(decoder_inst0_rd_valid_out),

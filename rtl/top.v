@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 `default_nettype none
 `include "memory_map.vh"
 
@@ -41,6 +42,7 @@ module top (
     wire [31:0] instr_read_data;
 
     wire cache_stall;               // Stall signal from I-cache to CPU
+    wire load_use_stall;            // Stall signal from CPU to I-cache
     wire cache_hit, cache_miss;     // Cache statistics
     
     // I-Cache to Burst Controller interface
@@ -111,6 +113,7 @@ module top (
         // CPU Interface
         .cpu_req(1'b1),                 // CPU always requests instructions
         .cpu_addr(cpu_pc_out),          // PC from CPU
+        .load_use_stall_in(load_use_stall),  // Stall signal from CPU
         .cpu_data(instr_to_cpu),        // Instruction to CPU
         .cpu_stall(cache_stall),        // Stall signal to CPU
         
@@ -169,7 +172,8 @@ module top (
         .module_write_addr(cpu_mem_write_addr),
         .module_write_byte_enable(cpu_write_byte_enable),
         .module_load_type(cpu_load_type),
-        .cache_stall(cache_stall)
+        .cache_stall(cache_stall),
+        .load_use_stall_out(load_use_stall)
     );
 
     // Instantiate instruction memory (dual-port for cache and direct access)

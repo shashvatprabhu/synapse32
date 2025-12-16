@@ -7,6 +7,7 @@ module IF_ID(
     input wire [31:0] pc_in,
     input wire [31:0] instruction_in,
     input wire enable,                 // Enable signal for stalls
+    input wire flush,                  // Flush signal for branch mispredictions
     input wire valid_in,
     output reg [31:0] pc_out,
     output reg [31:0] instruction_out,
@@ -17,6 +18,10 @@ always @(posedge clk or posedge rst) begin
     if (rst) begin
         pc_out <= 32'b0;
         instruction_out <= 32'b0;
+        valid_out <= 1'b0;
+    end else if (flush) begin
+        pc_out <= pc_in;
+        instruction_out <= 32'h00000013;  // Insert NOP
         valid_out <= 1'b0;
     end else if (enable) begin
         pc_out <= pc_in;

@@ -15,6 +15,7 @@ module icache_nway_multiword #(
     // CPU Interface
     input  wire                    cpu_req,
     input  wire [ADDR_WIDTH-1:0]   cpu_addr,
+    input  wire                    load_use_stall_in,  // External stall from pipeline
     output wire [DATA_WIDTH-1:0]   cpu_data,
     output wire                    cpu_stall,
     
@@ -289,8 +290,9 @@ module icache_nway_multiword #(
             cache_miss  <= 0;
             cache_evict <= 0;
 
-            // Handle cache hit - register the data (valid NEXT cycle)
-            if (cpu_req && hit && state == IDLE) begin
+            // Handle cache hit - register the data only when pipeline is advancing
+            // During external stalls (load-use), hold the output stable
+            if (cpu_req && hit && state == IDLE && !load_use_stall_in) begin
                 cpu_data_reg <= data_array[req_set][hit_way_num][req_word];
                 cpu_valid_reg <= 1;  // Data will be valid next cycle
                 cache_hit <= 1;
@@ -300,9 +302,11 @@ module icache_nway_multiword #(
                 cpu_valid_reg <= 1;
                 cache_miss <= 1;
                 cache_evict <= saved_will_evict;
-            end else begin
-                cpu_valid_reg <= 0;  // No valid data
+            end else if (!load_use_stall_in) begin
+                // Only clear valid when pipeline is advancing (not during external stalls)
+                cpu_valid_reg <= 0;
             end
+            // else: hold cpu_valid_reg and cpu_data_reg during load_use_stall
         end
     end
 
