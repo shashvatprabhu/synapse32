@@ -404,25 +404,17 @@ module riscv_cpu (
 
     // Add wires for store-load forwarding
     wire store_load_hazard;
-    wire type_match;
     wire [31:0] forwarded_store_data;
 
-    // Instantiate store-load hazard detector (detects the hazard condition)
+    // Instantiate store-load hazard detector
     store_load_detector store_load_detector_inst0 (
         .load_instr_id(ex_mem_inst0_instr_id_out),
         .load_addr(ex_mem_inst0_mem_addr_out),
         .prev_store_instr_id(mem_wb_inst0_instr_id_out),
         .prev_store_addr(mem_wb_inst0_mem_addr_out),
         .store_load_hazard(store_load_hazard),
-        .type_match(type_match)
-    );
-
-    // Instantiate store-load forwarding unit (handles data forwarding with sign extension)
-    store_load_forward store_load_forward_inst0 (
-        .load_instr_id(ex_mem_inst0_instr_id_out),
-        .store_data(mem_wb_inst0_rs2_value_out),  // Store data from WB stage
-        .forward_enable(store_load_hazard),
-        .forwarded_data(forwarded_store_data)
+        .forwarded_data(forwarded_store_data),
+        .rs2_value(ex_mem_inst0_rs2_value_out)  // Forwarded store data
     );
 
     MEM_WB mem_wb_inst0 (
