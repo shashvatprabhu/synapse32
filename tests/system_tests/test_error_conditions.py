@@ -34,6 +34,12 @@ async def wait_cycles(dut, n):
         await RisingEdge(dut.clk)
 
 
+async def load_program(dut, instructions):
+    """Load program into instruction memory"""
+    for i, instr in enumerate(instructions):
+        dut.instr_mem_inst.instr_ram[i].value = instr
+
+
 def create_hex_file(test_name, instructions):
     """Create hex file for instruction memory"""
     curr_dir = Path.cwd()
@@ -81,12 +87,8 @@ async def test_illegal_instruction(dut):
         0x0000006F,  # JAL x0, 0 (infinite loop)
     ]
 
-    hex_file = create_hex_file("illegal_instr", instructions)
-    print(f"[INFO] Created hex file: {hex_file}")
-
     # Load program
-    dut.instr_mem.mem_file.value = cocotb.binary.BinaryValue(hex_file.encode())
-
+    await load_program(dut, instructions)
     await wait_cycles(dut, 5)
 
     # Run for some cycles
@@ -94,9 +96,9 @@ async def test_illegal_instruction(dut):
 
     # Check behavior
     try:
-        x1 = int(dut.cpu.rf.register_file[1].value)
-        x2 = int(dut.cpu.rf.register_file[2].value)
-        pc = int(dut.cpu.pc_out.value)
+        x1 = int(dut.cpu_inst.rf_inst0.register_file[1].value)
+        x2 = int(dut.cpu_inst.rf_inst0.register_file[2].value)
+        pc = int(dut.cpu_inst.pc_inst0.out.value)
 
         print(f"[INFO] After illegal instruction:")
         print(f"  PC = 0x{pc:08x}")
@@ -135,16 +137,16 @@ async def test_misaligned_load_word(dut):
         0x0000006F,  # JAL x0, 0 (halt)
     ]
 
-    hex_file = create_hex_file("misaligned_load", instructions)
-    dut.instr_mem.mem_file.value = cocotb.binary.BinaryValue(hex_file.encode())
+    # Hex file creation removed
+    await load_program(dut, instructions)
 
     await wait_cycles(dut, 5)
     await wait_cycles(dut, 50)
 
     try:
-        x1 = int(dut.cpu.rf.register_file[1].value)
-        x2 = int(dut.cpu.rf.register_file[2].value)
-        x10 = int(dut.cpu.rf.register_file[10].value)
+        x1 = int(dut.cpu_inst.rf_inst0.register_file[1].value)
+        x2 = int(dut.cpu_inst.rf_inst0.register_file[2].value)
+        x10 = int(dut.cpu_inst.rf_inst0.register_file[10].value)
 
         print(f"[INFO] After misaligned load:")
         print(f"  x10 (address) = 0x{x10:08x}")
@@ -179,14 +181,14 @@ async def test_misaligned_store_word(dut):
         0x0000006F,  # JAL x0, 0 (halt)
     ]
 
-    hex_file = create_hex_file("misaligned_store", instructions)
-    dut.instr_mem.mem_file.value = cocotb.binary.BinaryValue(hex_file.encode())
+    # Hex file creation removed
+    await load_program(dut, instructions)
 
     await wait_cycles(dut, 5)
     await wait_cycles(dut, 50)
 
     try:
-        x2 = int(dut.cpu.rf.register_file[2].value)
+        x2 = int(dut.cpu_inst.rf_inst0.register_file[2].value)
         print(f"[INFO] After misaligned store:")
         print(f"  x2 (marker) = 0x{x2:08x}")
         print(f"[WARN] Misaligned store behavior is implementation-defined")
@@ -214,15 +216,15 @@ async def test_unmapped_memory_read(dut):
         0x0000006F,  # JAL x0, 0 (halt)
     ]
 
-    hex_file = create_hex_file("unmapped_read", instructions)
-    dut.instr_mem.mem_file.value = cocotb.binary.BinaryValue(hex_file.encode())
+    # Hex file creation removed
+    await load_program(dut, instructions)
 
     await wait_cycles(dut, 5)
     await wait_cycles(dut, 50)
 
     try:
-        x1 = int(dut.cpu.rf.register_file[1].value)
-        x2 = int(dut.cpu.rf.register_file[2].value)
+        x1 = int(dut.cpu_inst.rf_inst0.register_file[1].value)
+        x2 = int(dut.cpu_inst.rf_inst0.register_file[2].value)
 
         print(f"[INFO] After unmapped read:")
         print(f"  x1 (read value) = 0x{x1:08x}")
@@ -253,14 +255,14 @@ async def test_unmapped_memory_write(dut):
         0x0000006F,  # JAL x0, 0 (halt)
     ]
 
-    hex_file = create_hex_file("unmapped_write", instructions)
-    dut.instr_mem.mem_file.value = cocotb.binary.BinaryValue(hex_file.encode())
+    # Hex file creation removed
+    await load_program(dut, instructions)
 
     await wait_cycles(dut, 5)
     await wait_cycles(dut, 50)
 
     try:
-        x2 = int(dut.cpu.rf.register_file[2].value)
+        x2 = int(dut.cpu_inst.rf_inst0.register_file[2].value)
 
         print(f"[INFO] After unmapped write:")
         print(f"  x2 (marker) = 0x{x2:08x}")
@@ -325,8 +327,8 @@ async def test_all_registers_simultaneously(dut):
         0x0000006F,  # JAL x0, 0 (halt)
     ]
 
-    hex_file = create_hex_file("all_registers", instructions)
-    dut.instr_mem.mem_file.value = cocotb.binary.BinaryValue(hex_file.encode())
+    # Hex file creation removed
+    await load_program(dut, instructions)
 
     await wait_cycles(dut, 5)
     await wait_cycles(dut, 100)
@@ -335,7 +337,7 @@ async def test_all_registers_simultaneously(dut):
     all_correct = True
 
     # x0 should always be 0
-    x0 = int(dut.cpu.rf.register_file[0].value)
+    x0 = int(dut.cpu_inst.rf_inst0.register_file[0].value)
     if x0 != 0:
         print(f"[FAIL] x0 = {x0}, expected 0")
         all_correct = False
@@ -345,7 +347,7 @@ async def test_all_registers_simultaneously(dut):
     # Check x1, x2 (unchanged)
     expected_vals = {1: 1, 2: 2}
     for reg, expected in expected_vals.items():
-        val = int(dut.cpu.rf.register_file[reg].value)
+        val = int(dut.cpu_inst.rf_inst0.register_file[reg].value)
         if val == expected:
             print(f"[PASS] x{reg} = {val} ✓")
         else:
@@ -358,7 +360,7 @@ async def test_all_registers_simultaneously(dut):
     # x5 was 5, then became 6+7=13
     modified = {3: 3, 4: 9, 5: 13}
     for reg, expected in modified.items():
-        val = int(dut.cpu.rf.register_file[reg].value)
+        val = int(dut.cpu_inst.rf_inst0.register_file[reg].value)
         if val == expected:
             print(f"[PASS] x{reg} = {val} ✓")
         else:
@@ -368,7 +370,7 @@ async def test_all_registers_simultaneously(dut):
     # Spot check a few high registers
     spot_check = {10: 10, 20: 20, 31: 31}
     for reg, expected in spot_check.items():
-        val = int(dut.cpu.rf.register_file[reg].value)
+        val = int(dut.cpu_inst.rf_inst0.register_file[reg].value)
         if val == expected:
             print(f"[PASS] x{reg} = {val} ✓")
         else:

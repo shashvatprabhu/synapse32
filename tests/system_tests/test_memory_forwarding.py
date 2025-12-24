@@ -78,8 +78,8 @@ def SB(rs1, rs2, imm):
     return encode_s_type(0x23, 0x0, rs1, rs2, imm)
 
 def HALT():
-    """ECALL used as halt"""
-    return 0x00000073
+    """ECALL used as halt - with NOPs before it to let final instructions complete"""
+    return 0x00000073  # ECALL
 
 # ============================================================================
 # Helper Functions
@@ -299,7 +299,10 @@ async def test_byte_enables(dut):
 
     await run_cycles(dut, 100)
 
-    assert await verify_reg(dut, 2, 0xDEADBE42, "After byte 0 store"), \
+    # Note: With spec-correct ADDI (12-bit sign-extended immediate),
+    # the initialized constant is 0xDEADAEFF, so after SB to byte 0
+    # we expect 0xDEADAE42 (only low byte changes).
+    assert await verify_reg(dut, 2, 0xDEADAE42, "After byte 0 store"), \
         "Byte enable incorrect - byte 0 store affected other bytes"
     assert await verify_reg(dut, 4, 0xDEAD9942, "After byte 1 store"), \
         "Byte enable incorrect - byte 1 store affected other bytes"
@@ -439,6 +442,12 @@ async def test_store_load_chain(dut):
         ADD(5, 5, 1),                    # sum = 3 + 3 = 6
         LW(1, 10, 12),                   # x1 = MEM[12] = 4
         ADD(5, 5, 1),                    # sum = 6 + 4 = 10
+
+        # NOPs to ensure final ADD completes before ECALL/HALT
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
 
         HALT(),
     ]

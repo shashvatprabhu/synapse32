@@ -402,20 +402,26 @@ module riscv_cpu (
     wire mem_wb_inst0_rd_valid_out;
     wire [31:0] mem_wb_inst0_mem_data_out;
 
-    // Add wires for store-load forwarding
+    // Store-load forwarding wires
     wire store_load_hazard;
     wire [31:0] forwarded_store_data;
 
-    // Instantiate store-load hazard detector
+    // Store-load hazard detector
+    // Compare current load in MEM (EX/MEM stage) with previous store in WB (MEM/WB stage).
     store_load_detector store_load_detector_inst0 (
         .load_instr_id(ex_mem_inst0_instr_id_out),
         .load_addr(ex_mem_inst0_mem_addr_out),
         .prev_store_instr_id(mem_wb_inst0_instr_id_out),
         .prev_store_addr(mem_wb_inst0_mem_addr_out),
+        // Use STORE's rs2 value from WB stage as the source data
+        .rs2_value(mem_wb_inst0_rs2_value_out),
         .store_load_hazard(store_load_hazard),
-        .forwarded_data(forwarded_store_data),
-        .rs2_value(ex_mem_inst0_rs2_value_out)  // Forwarded store data
+        .forwarded_data(forwarded_store_data)
     );
+
+    // Mux memory data: use forwarded data if store-load hazard, else use memory
+    wire [31:0] mem_data_to_wb;
+    assign mem_data_to_wb = store_load_hazard ? forwarded_store_data : module_read_data_in;
 
     MEM_WB mem_wb_inst0 (
         .clk(clk),
@@ -432,11 +438,7 @@ module riscv_cpu (
         .jump_addr_in(ex_mem_inst0_jump_addr_out),
         .instr_id_in(ex_mem_inst0_instr_id_out),
         .rd_valid_in(ex_mem_inst0_rd_valid_out),
-        .mem_data_in(module_read_data_in),  // Connect memory data
-
-        // Store-load forwarding connections
-        .store_load_hazard(store_load_hazard),
-        .store_data(forwarded_store_data),
+        .mem_data_in(mem_data_to_wb),  // Pre-muxed data (forwarded or from memory)
 
         // Outputs
         .rs1_addr_out(mem_wb_inst0_rs1_addr_out),
