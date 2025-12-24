@@ -14,6 +14,7 @@ module instr_mem #(
 );
 
 // Array of 32-bit words (keeps $readmemh compatibility)
+localparam MEM_ADDR_BITS = $clog2(MEM_SIZE);
 reg [DATA_WIDTH-1:0] instr_ram [0:MEM_SIZE-1];
 
 `ifdef COCOTB_SIM
@@ -63,8 +64,7 @@ always @(*) begin
     
     // Read the 32-bit word containing our target data
     if (word_addr < MEM_SIZE) begin
-        /* verilator lint_off WIDTHTRUNC */
-        word_data = instr_ram[word_addr]; // Read word-aligned data
+        word_data = instr_ram[MEM_ADDR_BITS'(word_addr)]; // Read word-aligned data
     end else begin
         word_data = 32'h00000000;
     end
@@ -88,7 +88,7 @@ always @(*) begin
         // Halfword access that crosses word boundary
         reg [31:0] next_word_data;
         if (word_addr + 1 < MEM_SIZE) begin
-            next_word_data = instr_ram[word_addr + 1];
+            next_word_data = instr_ram[MEM_ADDR_BITS'(word_addr + 1)];
         end else begin
             next_word_data = 32'h00000000;
         end
@@ -99,7 +99,7 @@ always @(*) begin
         // Word access that crosses word boundary - need to combine two words
         reg [31:0] next_word_data;
         if (word_addr + 1 < MEM_SIZE) begin
-            next_word_data = instr_ram[word_addr + 1];
+            next_word_data = instr_ram[MEM_ADDR_BITS'(word_addr + 1)];
         end else begin
             next_word_data = 32'h00000000;
         end
