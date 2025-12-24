@@ -1,4 +1,7 @@
 `default_nettype none
+`include "instr_defines.vh"
+`include "memory_map.vh"
+
 module riscv_cpu (
     input wire clk,
     input wire rst,
@@ -16,14 +19,41 @@ module riscv_cpu (
     // Interrupt inputs
     input wire timer_interrupt,
     input wire software_interrupt,
-    input wire external_interrupt
+    input wire external_interrupt,
+    
+    // Instruction cache interface
+    input wire icache_stall,                     // Instruction cache miss stall
+    output wire fence_i_signal                   // FENCE.I invalidation signal
 );
+
+    // Startup NOP injection: inject NOPs after reset to sync pipeline registers before first instruction reaches writeback
+    reg [2:0] startup_nop_counter;
+    wire startup_sequence;
+    assign startup_sequence = (startup_nop_counter < 3'd4);
+
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            startup_nop_counter <= 3'b000;
+        end else if (startup_sequence) begin
+            startup_nop_counter <= startup_nop_counter + 3'd1;
+        end
+    end
 
     // Instantiate PC
     wire [31:0] pc_inst0_out;
     wire pc_inst0_j_signal;
     wire [31:0] pc_inst0_jump;
     wire stall_pipeline; // For load-use hazards
+    
+    // Stalls: pipeline (hazards, cache), PC (pipeline + startup)
+    wire pipeline_stall;
+    wire pc_stall;
+    assign pipeline_stall = stall_pipeline || icache_stall;
+    assign pc_stall = pipeline_stall || startup_sequence;
+    
+    // FENCE.I detection - invalidate instruction cache
+    assign fence_i_signal = (id_ex_inst0_instr_id_out == INSTR_FENCE_I);
+    
     // Branch handling: use EX stage jump signal/address
     assign pc_inst0_j_signal = ex_inst0_jump_signal_out;
     assign pc_inst0_jump = ex_inst0_jump_addr_out;
@@ -32,7 +62,7 @@ module riscv_cpu (
         .rst(rst),
         .j_signal(pc_inst0_j_signal),
         .jump(pc_inst0_jump),
-        .stall(stall_pipeline), // Stall on load-use hazard
+        .stall(pc_stall), // Stall on load-use hazard, cache miss, or startup NOP sequence
         .out(pc_inst0_out)
     );
 
@@ -44,14 +74,21 @@ module riscv_cpu (
     wire [31:0] if_id_pc_out;
     wire [31:0] if_id_instr_out;
     wire branch_flush;
-    assign branch_flush = ex_inst0_jump_signal_out; // Flush IF/ID if branch taken
-    // If branch taken, flush IF/ID by setting instruction to 0 (NOP)
+    assign branch_flush = ex_inst0_jump_signal_out;
+    wire if_id_stall;
+    // Do NOT stall IF/ID during startup sequence; we want NOPs to flow through the pipeline.
+    assign if_id_stall = pipeline_stall && !branch_flush;
+    
+    // Inject NOPs (ADDI x0, x0, 0 = 0x00000013) during startup or branch flush
+    wire [31:0] instruction_to_if_id;
+    assign instruction_to_if_id = (branch_flush || startup_sequence) ? 32'h00000013 : module_instr_in;
+    
     IF_ID if_id_inst0 (
         .clk(clk),
         .rst(rst),
         .pc_in(pc_inst0_out),
-        .instruction_in(branch_flush ? 32'h13 : module_instr_in),
-        .stall(stall_pipeline), // Stall on load-use hazard
+        .instruction_in(instruction_to_if_id),
+        .stall(if_id_stall),
         .pc_out(if_id_pc_out),
         .instruction_out(if_id_instr_out)
     );
@@ -103,6 +140,7 @@ module riscv_cpu (
 
     registerfile rf_inst0 (
         .clk(clk),
+        .rst(rst),
         .rs1(decoder_inst0_rs1_out),
         .rs2(decoder_inst0_rs2_out),
         .rs1_valid(decoder_inst0_rs1_valid_out),
@@ -150,7 +188,8 @@ module riscv_cpu (
         .pc_in(if_id_pc_out),
         .rs1_value_in(rf_inst0_rs1_value_out),
         .rs2_value_in(rf_inst0_rs2_value_out),
-        .stall(pipeline_flush || stall_pipeline), // Use combined flush
+        // Stall on hazards/cache/flush only, not startup (allow NOPs to propagate)
+        .stall(pipeline_flush || pipeline_stall),
         .rs1_valid_out(id_ex_inst0_rs1_valid_out),
         .rs2_valid_out(id_ex_inst0_rs2_valid_out),
         .rd_valid_out(id_ex_inst0_rd_valid_out),
@@ -382,20 +421,23 @@ module riscv_cpu (
     wire mem_wb_inst0_rd_valid_out;
     wire [31:0] mem_wb_inst0_mem_data_out;
 
-    // Add wires for store-load forwarding
     wire store_load_hazard;
     wire [31:0] forwarded_store_data;
 
-    // Instantiate store-load hazard detector
     store_load_detector store_load_detector_inst0 (
         .load_instr_id(ex_mem_inst0_instr_id_out),
         .load_addr(ex_mem_inst0_mem_addr_out),
         .prev_store_instr_id(mem_wb_inst0_instr_id_out),
         .prev_store_addr(mem_wb_inst0_mem_addr_out),
+        .rs2_value(mem_wb_inst0_rs2_value_out),
         .store_load_hazard(store_load_hazard),
-        .forwarded_data(forwarded_store_data),
-        .rs2_value(ex_mem_inst0_rs2_value_out)  // Forwarded store data
+        .forwarded_data(forwarded_store_data)
     );
+
+    // Only forward for RAM (DATA_MEM), not MMIO regions (UART, Timer)
+    wire is_data_mem = `IS_DATA_MEM(ex_mem_inst0_mem_addr_out);
+    wire [31:0] mem_data_to_wb;
+    assign mem_data_to_wb = (store_load_hazard && is_data_mem) ? forwarded_store_data : module_read_data_in;
 
     MEM_WB mem_wb_inst0 (
         .clk(clk),
@@ -412,11 +454,7 @@ module riscv_cpu (
         .jump_addr_in(ex_mem_inst0_jump_addr_out),
         .instr_id_in(ex_mem_inst0_instr_id_out),
         .rd_valid_in(ex_mem_inst0_rd_valid_out),
-        .mem_data_in(module_read_data_in),  // Connect memory data
-
-        // Store-load forwarding connections
-        .store_load_hazard(store_load_hazard),
-        .store_data(forwarded_store_data),
+        .mem_data_in(mem_data_to_wb),
 
         // Outputs
         .rs1_addr_out(mem_wb_inst0_rs1_addr_out),
@@ -453,7 +491,5 @@ module riscv_cpu (
         .rd_value_out(wb_inst0_rd_value_out),
         .wr_en_out(wb_inst0_wr_en_out)
     );
-
-    // Write Back Stage
 
 endmodule
