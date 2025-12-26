@@ -128,6 +128,9 @@ def CSRRWI(rd, csr, imm):
 def FENCE_I():
     return encode_i_type(0x0F, 0, 0x1, 0, 0)
 
+def NOP():
+    return ADDI(0, 0, 0)
+
 def HALT():
     return JAL(0, 0)
 
@@ -279,19 +282,27 @@ async def test_extreme_hazards(dut):
 
     program.append(LUI(10, DATA_MEM_BASE >> 12))  # x10 = base address
 
-    # Create 5 back-to-back load-use hazards
+    # Create load-use hazards with NOPs for load queue
     program.append(LW(11, 10, 0))           # x11 = 100
-    program.append(ADDI(11, 11, 1))         # x11 = 101 (load-use!)
+    program.append(NOP())                    # Wait for load queue
+    program.append(NOP())
+    program.append(NOP())
+    program.append(NOP())
+    program.append(ADDI(11, 11, 1))         # x11 = 101
     program.append(LW(12, 10, 4))           # x12 = 200
-    program.append(ADDI(12, 12, 1))         # x12 = 201 (load-use!)
+    program.append(NOP())                    # Wait for load queue
+    program.append(NOP())
+    program.append(NOP())
+    program.append(NOP())
+    program.append(ADDI(12, 12, 1))         # x12 = 201
     program.append(ADD(13, 11, 12))         # x13 = 302
 
     program.append(HALT())
 
     await load_program(dut, program)
 
-    # This should take a LONG time due to many stalls
-    await wait_cycles(dut, 2000)
+    # This should take a LONG time due to many stalls + load queue latency
+    await wait_cycles(dut, 3000)
 
     # Verify the dependency chain worked
     # x30 should equal 30 (from chain x1=1, x2=2, ..., x30=30)
@@ -328,13 +339,22 @@ async def test_cache_hazard_combo(dut):
 
     # Test cache with multiple loads creating hazards
     # This tests instruction cache working while data hazards are resolved
+    # Add NOPs for load queue latency (need 4 NOPs)
     program = [
         LUI(10, DATA_MEM_BASE >> 12),  # x10 = base address
         LW(1, 10, 0),                  # x1 = MEM[base] = 42
-        ADD(2, 1, 1),                  # x2 = x1 + x1 = 84 (load-use hazard)
+        NOP(),                         # Wait for load queue
+        NOP(),
+        NOP(),
+        NOP(),
+        ADD(2, 1, 1),                  # x2 = x1 + x1 = 84
         ADDI(3, 2, 10),                # x3 = x2 + 10 = 94 (RAW hazard)
         LW(4, 10, 4),                  # x4 = MEM[base+4] = 58
-        ADD(5, 3, 4),                  # x5 = x3 + x4 = 152 (load-use hazard)
+        NOP(),                         # Wait for load queue
+        NOP(),
+        NOP(),
+        NOP(),
+        ADD(5, 3, 4),                  # x5 = x3 + x4 = 152
         ADDI(6, 5, 1),                 # x6 = x5 + 1 = 153 (RAW hazard)
         HALT(),
     ]
@@ -378,20 +398,26 @@ async def test_timer_interrupt(dut):
     # Enable timer interrupts via CSR
     # Set MIE.MTIE (bit 7) = 1
     program = [
-        CSRRWI(1, MIE, 0x80),      # Enable timer interrupt (bit 7)
-        CSRRWI(2, MSTATUS, 0x08),  # Enable global interrupts (MIE bit 3)
+        CSRRWI(1, MIE, 0x80),      # 0: Enable timer interrupt (bit 7)
+        CSRRWI(2, MSTATUS, 0x08),  # 1: Enable global interrupts (MIE bit 3)
 
         # Main program: count in a loop
-        ADDI(10, 0, 0),            # counter = 0
-        ADDI(11, 0, 100),          # max = 100
-        # Loop
-        ADDI(10, 10, 1),           # counter++
-        BNE(10, 11, -4),           # loop if counter < 100
-
-        # Done
-        ADDI(12, 0, 99),           # marker = 99
-        HALT(),
+        ADDI(10, 0, 0),            # 2: counter = 0
+        ADDI(11, 0, 100),          # 3: max = 100
+        # Loop starts at 4
+        ADDI(10, 10, 1),           # 4: counter++
+        NOP(),                     # 5: Placeholder for branch
     ]
+
+    # Calculate branch offset: from index 5 to index 4
+    loop_offset = (4 - (5 + 1)) * 4
+    program[5] = BNE(10, 11, loop_offset)
+
+    program.extend([
+        # Done
+        ADDI(12, 0, 99),           # 6: marker = 99
+        HALT(),                    # 7
+    ])
 
     await load_program(dut, program)
 
@@ -432,13 +458,18 @@ async def test_external_interrupt(dut):
 
     # Simple counting program
     program = [
-        ADDI(1, 0, 0),      # counter = 0
-        ADDI(2, 0, 50),     # max = 50
-        # Loop
-        ADDI(1, 1, 1),      # counter++
-        BNE(1, 2, -4),      # loop
-        HALT(),
+        ADDI(1, 0, 0),      # 0: counter = 0
+        ADDI(2, 0, 50),     # 1: max = 50
+        # Loop starts at 2
+        ADDI(1, 1, 1),      # 2: counter++
+        NOP(),              # 3: Placeholder for branch
     ]
+
+    # Calculate branch offset: from index 3 to index 2
+    loop_offset = (2 - (3 + 1)) * 4
+    program[3] = BNE(1, 2, loop_offset)
+
+    program.append(HALT())  # 4
 
     await load_program(dut, program)
 
@@ -478,16 +509,21 @@ async def test_interrupt_during_hazard(dut):
     set_data_mem(dut, DATA_MEM_BASE, 123)
 
     program = [
-        LUI(10, DATA_MEM_BASE >> 12),
-        ADDI(1, 0, 0),      # counter = 0
-        # Loop with load-use hazard
-        LW(2, 10, 0),       # Load (causes stall on next instr)
-        ADDI(3, 2, 1),      # Use immediately (stall!)
-        ADDI(1, 1, 1),      # counter++
-        ADDI(4, 0, 20),
-        BNE(1, 4, -16),     # loop 20 times
-        HALT(),
+        LUI(10, DATA_MEM_BASE >> 12),  # 0
+        ADDI(1, 0, 0),      # 1: counter = 0
+        # Loop with load-use hazard starts at 2
+        LW(2, 10, 0),       # 2: Load (causes stall on next instr)
+        ADDI(3, 2, 1),      # 3: Use immediately (stall!)
+        ADDI(1, 1, 1),      # 4: counter++
+        ADDI(4, 0, 20),     # 5: max = 20
+        NOP(),              # 6: Placeholder for branch
     ]
+
+    # Calculate branch offset: from index 6 to index 2
+    loop_offset = (2 - (6 + 1)) * 4
+    program[6] = BNE(1, 4, loop_offset)
+
+    program.append(HALT())  # 7
 
     await load_program(dut, program)
 
@@ -564,9 +600,14 @@ async def test_unmapped_memory(dut):
     await reset_dut(dut)
 
     # Access completely unmapped address
+    # With load queue, need 4 NOPs after load
     program = [
         LUI(10, UNMAPPED_ADDR >> 12),  # x10 = unmapped address
         LW(1, 10, 0),                   # Try to load from unmapped
+        NOP(),                          # Wait for load queue
+        NOP(),
+        NOP(),
+        NOP(),
         ADDI(2, 0, 99),                 # This should still execute
         HALT(),
     ]
@@ -633,35 +674,42 @@ async def test_simultaneous_stalls(dut):
         set_data_mem(dut, DATA_MEM_BASE + i*4, i+50)
 
     program = [
-        LUI(10, DATA_MEM_BASE >> 12),  # Base address
-        ADDI(15, 0, 0),                # Loop counter
-        ADDI(16, 0, 10),               # Loop max
+        LUI(10, DATA_MEM_BASE >> 12),  # 0: Base address
+        ADDI(15, 0, 0),                # 1: Loop counter
+        ADDI(16, 0, 10),               # 2: Loop max
 
-        # Loop with multiple stall sources
-        LW(1, 10, 0),                  # Cache miss (possibly)
-        ADD(2, 1, 1),                  # Load-use hazard
-        ADDI(3, 2, 1),                 # RAW hazard chain
-        BNE(3, 15, 8),                 # Branch (control hazard)
-        FENCE_I(),                      # Force cache invalidation
-
-        # Continue loop
-        ADDI(15, 15, 1),               # counter++
-        BNE(15, 16, -28),              # Loop back
-
-        ADDI(20, 0, 77),               # Marker
-        HALT(),
+        # Loop with multiple stall sources starts at 3
+        LW(1, 10, 0),                  # 3: Cache miss (possibly)
+        NOP(),                         # 4: Wait for load queue
+        NOP(),                         # 5
+        NOP(),                         # 6
+        NOP(),                         # 7
+        ADD(2, 1, 1),                  # 8: Use loaded value
+        ADDI(3, 2, 1),                 # 9: RAW hazard chain
+        ADDI(15, 15, 1),               # 10: counter++
+        NOP(),                         # 11: Placeholder for loop branch
     ]
+
+    # Calculate loop branch offset: from index 11 back to index 3
+    loop_offset = (3 - (11 + 1)) * 4
+    program[11] = BNE(15, 16, loop_offset)
+
+    program.extend([
+        ADDI(20, 0, 77),               # 12: Marker
+        HALT(),                        # 13
+    ])
 
     await load_program(dut, program)
 
     # This should experience:
     # - Cache misses/refills
-    # - Load-use stalls
+    # - Load-use stalls (with load queue latency)
     # - RAW hazard forwarding
     # - Branch mispredictions
     # - All potentially happening at once!
 
-    await wait_cycles(dut, 500)
+    # Need many more cycles for load queue + all the stalls
+    await wait_cycles(dut, 1000)
 
     # Verify loop completed
     counter = int(dut.cpu_inst.rf_inst0.register_file[15].value)

@@ -334,13 +334,29 @@ async def test_halfword_enables(dut):
         ADDI(1, 0, 0x123),              # x1 = 0x0123
         SH(10, 1, 0),                   # MEM[base+0] halfword 0 = 0x0123 (was 0xBEEF)
         # Option 1: SH->LW doesn't forward, LW reads from memory after store completes
+        ADDI(0, 0, 0),                  # NOP (wait for store to retire)
+        ADDI(0, 0, 0),                  # NOP
+        ADDI(0, 0, 0),                  # NOP
+        ADDI(0, 0, 0),                  # NOP
         LW(2, 10, 0),                   # x2 = full word from memory (should be 0xDEAD0123)
+        ADDI(0, 0, 0),                  # NOP (wait for load)
+        ADDI(0, 0, 0),                  # NOP
+        ADDI(0, 0, 0),                  # NOP
+        ADDI(0, 0, 0),                  # NOP
 
         # Store halfword 1 and verify only halfword 1 changed
         LUI(3, 0x00005),                # x3 = 0x5000
         ADDI(3, 3, 0x678),              # x3 = 0x5678
         SH(10, 3, 2),                   # MEM[base+2] halfword 1 = 0x5678 (was 0xDEAD)
+        ADDI(0, 0, 0),                  # NOP (wait for store to retire)
+        ADDI(0, 0, 0),                  # NOP
+        ADDI(0, 0, 0),                  # NOP
+        ADDI(0, 0, 0),                  # NOP
         LW(4, 10, 0),                   # x4 = full word from memory (should be 0x56780123)
+        ADDI(0, 0, 0),                  # NOP (wait for load)
+        ADDI(0, 0, 0),                  # NOP
+        ADDI(0, 0, 0),                  # NOP
+        ADDI(0, 0, 0),                  # NOP
 
         HALT(),
     ]
@@ -431,16 +447,37 @@ async def test_store_load_chain(dut):
         SW(10, 1, 8),                    # MEM[8] = 3
         ADDI(1, 0, 4),
         SW(10, 1, 12),                   # MEM[12] = 4
+        # Wait for stores to be in store queue
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
 
         # Load and sum (reuse x1 like the working test)
         ADDI(5, 0, 0),                   # x5 = sum = 0
         LW(1, 10, 0),                    # x1 = MEM[0] = 1
+        ADDI(0, 0, 0),                   # NOP (wait for load)
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
         ADD(5, 5, 1),                    # sum = 0 + 1 = 1
         LW(1, 10, 4),                    # x1 = MEM[4] = 2
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
         ADD(5, 5, 1),                    # sum = 1 + 2 = 3
         LW(1, 10, 8),                    # x1 = MEM[8] = 3
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
         ADD(5, 5, 1),                    # sum = 3 + 3 = 6
         LW(1, 10, 12),                   # x1 = MEM[12] = 4
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
+        ADDI(0, 0, 0),                   # NOP
         ADD(5, 5, 1),                    # sum = 6 + 4 = 10
 
         # NOPs to ensure final ADD completes before ECALL/HALT

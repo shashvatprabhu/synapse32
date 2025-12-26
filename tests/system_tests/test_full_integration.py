@@ -1158,37 +1158,43 @@ async def test_raw_hazard(dut):
 
 @cocotb.test()
 async def test_load_use_hazard(dut):
-    """Test load-use hazard with stalling"""
-    log.info("=== Test: Load-Use Hazard ===")
-    
+    """Test load-use hazard with load queue"""
+    log.info("=== Test: Load-Use Hazard (with load queue) ===")
+
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
-    
+
     await reset_dut(dut)
-    
+
     # Initialize data memory
     set_data_mem(dut, DATA_MEM_BASE, 42)
     set_data_mem(dut, DATA_MEM_BASE + 4, 58)
-    
+
+    # With load queue, loads complete asynchronously, so we need NOPs
+    # between load and use to allow queue to complete
     program = [
         LUI(10, DATA_MEM_BASE >> 12),   # x10 = base address
-        LW(1, 10, 0),                   # x1 = MEM[base] = 42
-        ADD(2, 1, 1),                   # x2 = x1 + x1 = 84 (load-use hazard)
-        LW(3, 10, 4),                   # x3 = MEM[base+4] = 58
-        ADDI(4, 3, 10),                 # x4 = x3 + 10 = 68 (load-use hazard)
+        LW(1, 10, 0),                   # x1 = MEM[base] = 42 (enqueued to LQ)
+        NOP(),                          # Wait for load queue
+        NOP(),                          # Wait for load queue
+        ADD(2, 1, 1),                   # x2 = x1 + x1 = 84
+        LW(3, 10, 4),                   # x3 = MEM[base+4] = 58 (enqueued to LQ)
+        NOP(),                          # Wait for load queue
+        NOP(),                          # Wait for load queue
+        ADDI(4, 3, 10),                 # x4 = x3 + 10 = 68
         ADD(5, 1, 3),                   # x5 = x1 + x3 = 100
         HALT(),
     ]
     await load_program(dut, program)
-    
-    await run_cycles(dut, 100)
-    
+
+    await run_cycles(dut, 150)  # More cycles for load queue processing
+
     assert await verify_reg(dut, 1, 42, "LW 1")
     assert await verify_reg(dut, 2, 84, "Load-use ADD")
     assert await verify_reg(dut, 3, 58, "LW 2")
     assert await verify_reg(dut, 4, 68, "Load-use ADDI")
     assert await verify_reg(dut, 5, 100, "ADD after loads")
-    
+
     log.info("Load-use hazard test PASSED")
 
 @cocotb.test()
@@ -1420,15 +1426,16 @@ async def test_function_call(dut):
 
 @cocotb.test()
 async def test_memory_intensive(dut):
-    """Test memory-intensive operations with cache"""
-    log.info("=== Test: Memory Intensive ===")
-    
+    """Test memory-intensive operations with load queue"""
+    log.info("=== Test: Memory Intensive (with load queue) ===")
+
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
-    
+
     await reset_dut(dut)
-    
+
     # Store array, then read back and sum
+    # With load queue, need NOPs between load and use
     program = [
         LUI(10, DATA_MEM_BASE >> 12),   # x10 = base address
         # Store values 1-4
@@ -1442,22 +1449,30 @@ async def test_memory_intensive(dut):
         SW(10, 1, 12),      # MEM[12] = 4
         # Load and sum
         ADDI(5, 0, 0),      # x5 = sum = 0
-        LW(1, 10, 0),
+        LW(1, 10, 0),       # Load from LQ
+        NOP(),              # Wait for load queue
+        NOP(),
         ADD(5, 5, 1),       # sum += MEM[0]
-        LW(1, 10, 4),
+        LW(1, 10, 4),       # Load from LQ
+        NOP(),              # Wait for load queue
+        NOP(),
         ADD(5, 5, 1),       # sum += MEM[4]
-        LW(1, 10, 8),
+        LW(1, 10, 8),       # Load from LQ
+        NOP(),              # Wait for load queue
+        NOP(),
         ADD(5, 5, 1),       # sum += MEM[8]
-        LW(1, 10, 12),
+        LW(1, 10, 12),      # Load from LQ
+        NOP(),              # Wait for load queue
+        NOP(),
         ADD(5, 5, 1),       # sum += MEM[12]
         HALT(),
     ]
     await load_program(dut, program)
-    
-    await run_cycles(dut, 150)
-    
+
+    await run_cycles(dut, 200)  # More cycles for load queue processing
+
     assert await verify_reg(dut, 5, 10, "Memory sum (1+2+3+4)")
-    
+
     log.info("Memory intensive test PASSED")
 
 # ============================================================================

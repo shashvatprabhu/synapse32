@@ -76,6 +76,9 @@ def JAL(rd, imm):
 def LUI(rd, imm):
     return encode_u_type(0x37, rd, imm)
 
+def NOP():
+    return ADDI(0, 0, 0)
+
 def HALT():
     return JAL(0, 0)
 
@@ -200,44 +203,57 @@ async def test_memory_intensive_workload(dut):
     # Program that writes and reads 50 memory locations in loops
     # Store values 1-50, then read them back and sum
     instructions = [
-        LUI(10, 0x10000),    # x10 = 0x10000000 (data memory base)
-        ADDI(5, 0, 0),       # sum = 0
-        ADDI(1, 0, 0),       # index = 0
-        ADDI(2, 0, 50),      # count = 50
+        LUI(10, 0x10000),    # 0: x10 = 0x10000000 (data memory base)
+        ADDI(5, 0, 0),       # 1: sum = 0
+        ADDI(1, 0, 0),       # 2: index = 0
+        ADDI(2, 0, 50),      # 3: count = 50
 
-        # Write loop (PC = 0x10)
-        ADDI(3, 1, 1),       # value = index + 1
-        SW(10, 3, 0),        # MEM[x10] = value
-        ADDI(10, 10, 4),     # x10 += 4
-        ADDI(1, 1, 1),       # index++
-        BNE(1, 2, -16),      # if index < count, continue
-
-        # Reset for read loop
-        LUI(10, 0x10000),    # x10 = 0x10000000
-        ADDI(1, 0, 0),       # index = 0
-
-        # Read loop (PC = 0x34)
-        LW(3, 10, 0),        # x3 = MEM[x10]
-        ADD(5, 5, 3),        # sum += x3
-        ADDI(10, 10, 4),     # x10 += 4
-        ADDI(1, 1, 1),       # index++
-        BNE(1, 2, -16),      # if index < count, continue
-
-        # Done
-        HALT()
+        # Write loop starts at index 4
+        ADDI(3, 1, 1),       # 4: value = index + 1
+        SW(10, 3, 0),        # 5: MEM[x10] = value
+        ADDI(10, 10, 4),     # 6: x10 += 4
+        ADDI(1, 1, 1),       # 7: index++
+        NOP(),               # 8: Placeholder for branch
     ]
+
+    # Calculate write loop branch: from index 8 to index 4
+    write_loop_offset = (4 - (8 + 1)) * 4  # (target - (branch_idx + 1)) * 4
+    instructions[8] = BNE(1, 2, write_loop_offset)
+
+    instructions.extend([
+        # Reset for read loop
+        LUI(10, 0x10000),    # 9: x10 = 0x10000000
+        ADDI(1, 0, 0),       # 10: index = 0
+
+        # Read loop starts at index 11
+        LW(3, 10, 0),        # 11: x3 = MEM[x10]
+        NOP(),               # 12: Wait for load queue
+        NOP(),               # 13:
+        NOP(),               # 14:
+        NOP(),               # 15:
+        ADD(5, 5, 3),        # 16: sum += x3
+        ADDI(10, 10, 4),     # 17: x10 += 4
+        ADDI(1, 1, 1),       # 18: index++
+        NOP(),               # 19: Placeholder for branch
+    ])
+
+    # Calculate read loop branch: from index 19 to index 11
+    read_loop_offset = (11 - (19 + 1)) * 4  # (target - (branch_idx + 1)) * 4
+    instructions[19] = BNE(1, 2, read_loop_offset)
+
+    instructions.append(HALT())  # 20: Done
 
     await load_program(dut, instructions)
 
     print(f"[INFO] Running memory-intensive workload...")
     print(f"[INFO] Writing 50 values, then reading and summing them")
 
-    # Run for enough cycles
-    max_cycles = 5000
+    # Run for enough cycles (more for load queue latency)
+    max_cycles = 8000
     for cycle in range(0, max_cycles, 100):
         await wait_cycles(dut, 100)
         pc = int(dut.pc_debug.value)
-        if pc == 0x48:  # Halt address
+        if pc == 0x50:  # Halt address (adjusted for NOPs)
             print(f"[INFO] Program completed at cycle {cycle}")
             break
 

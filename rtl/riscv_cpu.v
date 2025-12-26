@@ -193,6 +193,12 @@ module riscv_cpu (
     wire [1:0] forward_a;
     wire [1:0] forward_b;
     
+    // Actual WB stage values (including store-queue and load-queue forwarding)
+    // These are computed later in the file, so we need to forward-declare them
+    wire actual_wb_wr_en;
+    wire [4:0] actual_wb_rd_addr;
+    wire actual_wb_rd_valid;
+
     // Instantiate forwarding unit
     forwarding_unit forwarding_unit_inst0 (
         .rs1_addr_ex(id_ex_inst0_rs1_addr_out),
@@ -202,9 +208,9 @@ module riscv_cpu (
         .rd_addr_mem(ex_mem_inst0_rd_addr_out),
         .rd_valid_mem(ex_mem_inst0_rd_valid_out),
         .instr_id_mem(ex_mem_inst0_instr_id_out),
-        .rd_addr_wb(mem_wb_inst0_rd_addr_out),
-        .rd_valid_wb(mem_wb_inst0_rd_valid_out),
-        .wr_en_wb(wb_inst0_wr_en_out),
+        .rd_addr_wb(actual_wb_rd_addr),      // Use actual WB rd (includes sq/lq forwarding)
+        .rd_valid_wb(actual_wb_rd_valid),    // Use actual WB rd_valid
+        .wr_en_wb(actual_wb_wr_en),          // Use actual WB write enable
         .forward_a(forward_a),
         .forward_b(forward_b)
     );
@@ -279,7 +285,7 @@ module riscv_cpu (
         .forward_a(forward_a),
         .forward_b(forward_b),
         .ex_mem_result(ex_mem_inst0_exec_output_out),
-        .mem_wb_result(wb_inst0_rd_value_out),
+        .mem_wb_result(rf_inst0_rd_value_in),  // Use actual WB value (includes sq/lq forwarding)
         
         // CSR interface connections
         .csr_read_data(csr_read_data),
@@ -308,6 +314,140 @@ module riscv_cpu (
         .ebreak_exception(ebreak_exception)
     );
 
+    // Load Queue instantiation
+    wire lq_enq_valid;
+    wire lq_enq_ready;
+    wire [2:0] lq_enq_lq_id;
+    wire lq_mem_req_valid;
+    wire [31:0] lq_mem_req_addr;
+    wire [2:0] lq_mem_req_lq_id;
+    wire lq_mem_req_ready;
+    wire lq_mem_resp_valid;
+    wire [31:0] lq_mem_resp_data;
+    wire [2:0] lq_mem_resp_lq_id;
+    wire lq_deq_valid;
+    wire [4:0] lq_deq_rd;
+    wire [31:0] lq_deq_data;
+    wire lq_deq_ready;
+    wire lq_full;
+    wire lq_empty;
+
+    // Store Queue instantiation
+    wire sq_enq_valid;
+    wire sq_enq_ready;
+    wire [2:0] sq_enq_sq_id;
+    wire sq_mem_write_valid;
+    wire [31:0] sq_mem_write_addr;
+    wire [31:0] sq_mem_write_data;
+    wire [3:0] sq_mem_write_byte_en;
+    wire sq_mem_write_ready;
+    wire sq_lookup_valid;
+    wire [31:0] sq_lookup_addr;
+    wire [2:0] sq_lookup_load_type;
+    wire sq_forward_match;
+    wire [31:0] sq_forward_data;
+    wire sq_full;
+    wire sq_empty;
+
+    // Determine if current EX instruction is a load
+    wire ex_is_load;
+    assign ex_is_load = (id_ex_inst0_instr_id_out == INSTR_LB) ||
+                        (id_ex_inst0_instr_id_out == INSTR_LH) ||
+                        (id_ex_inst0_instr_id_out == INSTR_LW) ||
+                        (id_ex_inst0_instr_id_out == INSTR_LBU) ||
+                        (id_ex_inst0_instr_id_out == INSTR_LHU);
+
+    // Determine if current EX instruction is a store
+    wire ex_is_store;
+    assign ex_is_store = (id_ex_inst0_instr_id_out == INSTR_SB) ||
+                         (id_ex_inst0_instr_id_out == INSTR_SH) ||
+                         (id_ex_inst0_instr_id_out == INSTR_SW);
+
+    // Extract load type from instruction ID
+    wire [2:0] ex_load_type;
+    assign ex_load_type =
+        (id_ex_inst0_instr_id_out == INSTR_LB)  ? 3'b000 :
+        (id_ex_inst0_instr_id_out == INSTR_LH)  ? 3'b001 :
+        (id_ex_inst0_instr_id_out == INSTR_LW)  ? 3'b010 :
+        (id_ex_inst0_instr_id_out == INSTR_LBU) ? 3'b100 :
+        (id_ex_inst0_instr_id_out == INSTR_LHU) ? 3'b101 :
+        3'b111;
+
+    // Extract store type from instruction ID
+    wire [2:0] ex_store_type;
+    assign ex_store_type =
+        (id_ex_inst0_instr_id_out == INSTR_SB) ? 3'b000 :
+        (id_ex_inst0_instr_id_out == INSTR_SH) ? 3'b001 :
+        (id_ex_inst0_instr_id_out == INSTR_SW) ? 3'b010 :
+        3'b111;
+
+    // Store-to-load forwarding from store queue to loads in EX stage
+    // Check if load can be forwarded from store queue before enqueueing to load queue
+    assign sq_lookup_valid = ex_is_load && !branch_flush && !execution_flush;
+    assign sq_lookup_addr = ex_inst0_mem_addr_out;
+    assign sq_lookup_load_type = ex_load_type;
+
+    // Enqueue loads from EX stage (only if not forwarded from store queue)
+    assign lq_enq_valid = ex_is_load && !branch_flush && !execution_flush && !sq_forward_match;
+
+    // Enqueue stores from EX stage
+    assign sq_enq_valid = ex_is_store && !branch_flush && !execution_flush;
+
+    load_queue #(
+        .ENTRIES(8),
+        .ADDR_WIDTH(32),
+        .DATA_WIDTH(32)
+    ) load_queue_inst (
+        .clk(clk),
+        .rst(rst),
+        .enq_valid(lq_enq_valid),
+        .enq_addr(ex_inst0_mem_addr_out),
+        .enq_rd(id_ex_inst0_rd_addr_out),
+        .enq_load_type(ex_load_type),
+        .enq_ready(lq_enq_ready),
+        .enq_lq_id(lq_enq_lq_id),
+        .mem_req_valid(lq_mem_req_valid),
+        .mem_req_addr(lq_mem_req_addr),
+        .mem_req_lq_id(lq_mem_req_lq_id),
+        .mem_req_ready(lq_mem_req_ready),
+        .mem_resp_valid(lq_mem_resp_valid),
+        .mem_resp_data(lq_mem_resp_data),
+        .mem_resp_lq_id(lq_mem_resp_lq_id),
+        .deq_valid(lq_deq_valid),
+        .deq_rd(lq_deq_rd),
+        .deq_data(lq_deq_data),
+        .deq_ready(lq_deq_ready),
+        .full(lq_full),
+        .empty(lq_empty)
+    );
+
+    store_queue #(
+        .ENTRIES(8),
+        .ADDR_WIDTH(32),
+        .DATA_WIDTH(32)
+    ) store_queue_inst (
+        .clk(clk),
+        .rst(rst),
+        .enq_valid(sq_enq_valid),
+        .enq_addr(ex_inst0_mem_addr_out),
+        .enq_data(ex_inst0_rs2_value_out),
+        .enq_store_type(ex_store_type),
+        .enq_ready(sq_enq_ready),
+        .enq_sq_id(sq_enq_sq_id),
+        .mem_write_valid(sq_mem_write_valid),
+        .mem_write_addr(sq_mem_write_addr),
+        .mem_write_data(sq_mem_write_data),
+        .mem_write_byte_en(sq_mem_write_byte_en),
+        .mem_write_ready(sq_mem_write_ready),
+        .lookup_valid(sq_lookup_valid),
+        .lookup_addr(sq_lookup_addr),
+        .lookup_load_type(sq_lookup_load_type),
+        .forward_match(sq_forward_match),
+        .forward_data(sq_forward_data),
+        .full(sq_full),
+        .empty(sq_empty)
+    );
+
     // Memory Stage
 
     // Instantiate EX_MEM pipeline register
@@ -324,6 +464,11 @@ module riscv_cpu (
     wire [5:0] ex_mem_inst0_instr_id_out;
     wire ex_mem_inst0_rd_valid_out;
 
+    // Invalidate rd_valid if load was forwarded from store queue
+    // Forwarded loads write back directly, shouldn't write back from pipeline
+    wire ex_mem_rd_valid_in;
+    assign ex_mem_rd_valid_in = sq_forward_match ? 1'b0 : id_ex_inst0_rd_valid_out;
+
     EX_MEM ex_mem_inst0 (
         .clk(clk),
         .rst(rst),
@@ -338,7 +483,7 @@ module riscv_cpu (
         .jump_signal_in(ex_inst0_jump_signal_out),
         .jump_addr_in(ex_inst0_jump_addr_out),
         .instr_id_in(id_ex_inst0_instr_id_out),
-        .rd_valid_in(id_ex_inst0_rd_valid_out),
+        .rd_valid_in(ex_mem_rd_valid_in),
         .rs1_addr_out(ex_mem_inst0_rs1_addr_out),
         .rs2_addr_out(ex_mem_inst0_rs2_addr_out),
         .rd_addr_out(ex_mem_inst0_rd_addr_out),
@@ -362,13 +507,42 @@ module riscv_cpu (
     wire [3:0] mem_unit_inst0_write_byte_enable_out;  // Write byte enables
     wire [2:0] mem_unit_inst0_load_type_out;          // Load type
 
-    assign module_mem_wr_en = mem_unit_inst0_wr_enable_out;
-    assign module_mem_rd_en = mem_unit_inst0_read_enable_out;
-    assign module_write_addr = mem_unit_inst0_wr_addr_out;
-    assign module_read_addr = mem_unit_inst0_read_addr_out;
-    assign module_wr_data_out = mem_unit_inst0_wr_data_out;
-    assign module_write_byte_enable = mem_unit_inst0_write_byte_enable_out;
-    assign module_load_type = mem_unit_inst0_load_type_out;
+    // Memory arbitration: Priority-based (industry standard)
+    // Dynamic priority based on queue occupancy to prevent starvation
+    // Priority levels:
+    //   1. Store queue almost full (>75%) - must drain to prevent deadlock
+    //   2. Load queue almost full (>75%) - loads block pipeline
+    //   3. Otherwise, loads have slight priority (programs stall on loads)
+
+    localparam SQ_ALMOST_FULL_THRESHOLD = 6;  // 75% of 8 entries
+    localparam LQ_ALMOST_FULL_THRESHOLD = 6;  // 75% of 8 entries
+
+    wire sq_almost_full;
+    wire lq_almost_full;
+    wire grant_load;
+    wire grant_store;
+
+    assign sq_almost_full = !sq_empty && (sq_full || !sq_enq_ready);  // Approximate fullness check
+    assign lq_almost_full = !lq_empty && (lq_full || !lq_enq_ready);
+
+    // Priority arbitration logic
+    assign grant_store = sq_mem_write_valid && (
+        !lq_mem_req_valid ||           // No competing load
+        sq_almost_full ||               // SQ almost full - prioritize draining
+        (!lq_almost_full)               // Neither full, stores get chance
+    );
+    assign grant_load = lq_mem_req_valid && !grant_store;
+
+    assign lq_mem_req_ready = grant_load;
+    assign sq_mem_write_ready = grant_store;
+
+    assign module_mem_rd_en = grant_load;
+    assign module_mem_wr_en = grant_store;
+    assign module_read_addr = lq_mem_req_addr;
+    assign module_write_addr = sq_mem_write_addr;
+    assign module_wr_data_out = sq_mem_write_data;
+    assign module_write_byte_enable = sq_mem_write_byte_en;
+    assign module_load_type = 3'b010;  // Unused - load queue handles extension
 
     memory_unit mem_unit_inst0 (
         .instr_id(ex_mem_inst0_instr_id_out),
@@ -398,6 +572,28 @@ module riscv_cpu (
     wire mem_wb_inst0_rd_valid_out;
     wire [31:0] mem_wb_inst0_mem_data_out;
 
+    // Memory response handling: Feed responses to load queue
+    // For now, assume 1-cycle memory latency for simplicity
+    reg mem_read_valid_reg;
+    reg [31:0] mem_read_data_reg;
+    reg [2:0] mem_read_lq_id_reg;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            mem_read_valid_reg <= 0;
+            mem_read_data_reg <= 0;
+            mem_read_lq_id_reg <= 0;
+        end else begin
+            mem_read_valid_reg <= module_mem_rd_en;
+            mem_read_data_reg <= module_read_data_in;
+            mem_read_lq_id_reg <= lq_mem_req_lq_id;
+        end
+    end
+
+    assign lq_mem_resp_valid = mem_read_valid_reg;
+    assign lq_mem_resp_data = mem_read_data_reg;
+    assign lq_mem_resp_lq_id = mem_read_lq_id_reg;
+
     wire store_load_hazard;
     wire [31:0] forwarded_store_data;
 
@@ -412,7 +608,7 @@ module riscv_cpu (
     );
 
     wire [31:0] mem_data_to_wb;
-    assign mem_data_to_wb = store_load_hazard ? forwarded_store_data : module_read_data_in;
+    assign mem_data_to_wb = 32'b0;  // Loads now come from load queue, not memory directly
 
     MEM_WB mem_wb_inst0 (
         .clk(clk),
@@ -452,9 +648,38 @@ module riscv_cpu (
     wire [4:0] wb_inst0_rd_addr_out;
     wire [31:0] wb_inst0_rd_value_out;
 
-    assign rf_inst0_rd_in = wb_inst0_rd_addr_out;
-    assign rf_inst0_wr_en = wb_inst0_wr_en_out;
-    assign rf_inst0_rd_value_in = wb_inst0_rd_value_out;
+    // Store-to-load forwarding: Simple approach - match load queue timing
+    // Register forwarded data once (like load queue), then both write at same time
+    reg sq_forwarded_valid;
+    reg [4:0] sq_forwarded_rd;
+    reg [31:0] sq_forwarded_data;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            sq_forwarded_valid <= 0;
+            sq_forwarded_rd <= 0;
+            sq_forwarded_data <= 0;
+        end else begin
+            // Register SQ forwarding for 1 cycle (same as LQ latency)
+            sq_forwarded_valid <= sq_forward_match;
+            sq_forwarded_rd <= id_ex_inst0_rd_addr_out;
+            sq_forwarded_data <= sq_forward_data;
+        end
+    end
+
+    // Load queue dequeue handling: Always ready to accept from load queue
+    assign lq_deq_ready = 1'b1;
+
+    // Writeback arbitration: Store-queue forwarding = Load queue (same timing)
+    // Both have same latency, write at same WB stage
+    assign rf_inst0_wr_en = sq_forwarded_valid ? 1'b1 : (lq_deq_valid ? 1'b1 : wb_inst0_wr_en_out);
+    assign rf_inst0_rd_in = sq_forwarded_valid ? sq_forwarded_rd : (lq_deq_valid ? lq_deq_rd : wb_inst0_rd_addr_out);
+    assign rf_inst0_rd_value_in = sq_forwarded_valid ? sq_forwarded_data : (lq_deq_valid ? lq_deq_data : wb_inst0_rd_value_out);
+
+    // Expose actual WB values to forwarding unit (includes all writeback sources)
+    assign actual_wb_wr_en = rf_inst0_wr_en;
+    assign actual_wb_rd_addr = rf_inst0_rd_in;
+    assign actual_wb_rd_valid = rf_inst0_wr_en;  // If writing, then rd is valid
 
     writeback wb_inst0 (
         .rd_valid_in(mem_wb_inst0_rd_valid_out),
