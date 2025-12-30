@@ -27,7 +27,8 @@ module icache #(
     input wire invalidate
 );
 
-    localparam OFFSET_BITS = $clog2(CACHE_LINE_WORDS);
+    // Handle CACHE_LINE_WORDS=1 edge case: $clog2(1)=0, but we need at least 1 bit
+    localparam OFFSET_BITS = (CACHE_LINE_WORDS == 1) ? 1 : $clog2(CACHE_LINE_WORDS);
     localparam INDEX_BITS = $clog2(NUM_SETS);
     localparam TAG_BITS = ADDR_WIDTH - INDEX_BITS - OFFSET_BITS - 2;
     localparam WAY_BITS = (NUM_WAYS == 1) ? 1 : $clog2(NUM_WAYS);
